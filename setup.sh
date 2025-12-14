@@ -1,69 +1,76 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ============================
-#  Configurações principais
-# ============================
-PROJ_DIR="$HOME/av2"
-PROFILE_NAME="k8s-2n"
-IMAGE_NAME="priority-api:v5"
-DEPLOY_FILE="api-deployment.yaml"
+IMAGE="algoritmos-distribuidos:latest"
 
-echo "📁 Indo para a pasta do projeto: $PROJ_DIR"
-cd "$PROJ_DIR"
+STS_NAME="algoritmos-coordenacao"
+POD_PREFIX="algoritmos-coordenacao"
 
-echo
-echo "🚀 Iniciando/reativando o cluster Minikube (profile: $PROFILE_NAME)..."
+echo "==> Indo para a pasta do projeto (onde está este script)..."
+cd "$(dirname "$0")"
 
-# Verifica se o profile já existe
-if minikube profile list 2>/dev/null | grep -q "^$PROFILE_NAME"; then
-  echo "▶️  Profile $PROFILE_NAME já existe, apenas iniciando..."
-  minikube start -p "$PROFILE_NAME"
-else
-  echo "🆕 Criando profile $PROFILE_NAME com 2 nós..."
-  minikube start -p "$PROFILE_NAME" --nodes=2
-fi
+command -v minikube >/dev/null 2>&1 || { echo "ERRO: minikube não encontrado."; exit 1; }
+command -v kubectl  >/dev/null 2>&1 || { echo "ERRO: kubectl não encontrado."; exit 1; }
+command -v docker   >/dev/null 2>&1 || { echo "ERRO: docker não encontrado."; exit 1; }
 
-echo
-echo "🧭 Configurando contexto do kubectl para usar o cluster $PROFILE_NAME..."
-kubectl config use-context "$PROFILE_NAME"
+echo "==> Subindo Minikube (Cloud Shell: 2 CPUs)..."
+minikube status >/dev/null 2>&1 && minikube stop >/dev/null 2>&1 || true
+minikube delete >/dev/null 2>&1 || true
+minikube start --cpus=2 --memory=4096
 
-echo
-echo "🧹 Limpando recursos antigos (service e deployment)..."
-kubectl delete service priority-api-svc --ignore-not-found
-kubectl delete deployment priority-api --ignore-not-found
+echo "==> Configurando Docker para usar o daemon do Minikube..."
+eval "$(minikube docker-env)"
 
-echo
-echo "🐳 Fazendo build da imagem Docker $IMAGE_NAME..."
-docker build -t "$IMAGE_NAME" .
+echo "==> Build da imagem Docker: ${IMAGE}"
+docker build -t "${IMAGE}" .
 
-echo
-echo "📦 Enviando imagem para o cluster Minikube (profile: $PROFILE_NAME)..."
-minikube image load "$IMAGE_NAME" -p "$PROFILE_NAME"
+echo "==> Aplicando manifestos Kubernetes..."
+kubectl apply -f k8s/service.yaml
+kubectl apply -f k8s/statefulset.yaml
 
-echo
-echo "📜 Aplicando Deployment e Service a partir de $DEPLOY_FILE..."
-kubectl apply -f "$DEPLOY_FILE"
+echo "==> Aguardando pods ficarem prontos..."
+kubectl rollout status statefulset/"${STS_NAME}" --timeout=180s || true
+for p in 0 1 2; do
+  echo "   - aguardando readiness do ${POD_PREFIX}-$p..."
+  kubectl wait --for=condition=Ready pod/"${POD_PREFIX}-$p" --timeout=180s
+done
 
-echo
-echo "⏳ Aguardando rollout do deployment priority-api..."
-kubectl rollout status deployment priority-api
+echo "==> (Re)iniciando port-forwards..."
+pkill -f "kubectl port-forward pod/${POD_PREFIX}-0 8080:8080" >/dev/null 2>&1 || true
+pkill -f "kubectl port-forward pod/${POD_PREFIX}-1 8081:8080" >/dev/null 2>&1 || true
+pkill -f "kubectl port-forward pod/${POD_PREFIX}-2 8082:8080" >/dev/null 2>&1 || true
 
-echo
-echo "📡 Pods atuais no cluster:"
-kubectl get pods -o wide
+nohup kubectl port-forward pod/"${POD_PREFIX}-0" 8080:8080 >/dev/null 2>&1 &
+nohup kubectl port-forward pod/"${POD_PREFIX}-1" 8081:8080 >/dev/null 2>&1 &
+nohup kubectl port-forward pod/"${POD_PREFIX}-2" 8082:8080 >/dev/null 2>&1 &
 
-echo
-echo "✅ Ambiente pronto!"
-echo
-echo "👉 Em OUTRO terminal, faça o port-forward para testar a API:"
-echo "   cd ~/av2"
-echo "   kubectl port-forward pod/$(kubectl get pod -l app=priority-api -o jsonpath="{.items[0].metadata.name}") 8080:8080"
-echo "   kubectl port-forward pod/$(kubectl get pod -l app=priority-api -o jsonpath="{.items[1].metadata.name}") 8080:8080"
-echo "   kubectl port-forward pod/$(kubectl get pod -l app=priority-api -o jsonpath="{.items[2].metadata.name}") 8080:8080"
-echo
-echo "👉 Depois rode os testes:"
-echo "   ./teste_q1_normal.sh"
-echo "   ./teste_q1_lento.sh"
-echo "   ./teste_q2.sh"
-echo "   ./teste_q3.sh"
+sleep 2
+
+echo ""
+echo "✅ Ambiente pronto! Pods em Running e port-forwards configurados:"
+echo "   - P0 -> http://127.0.0.1:8080"
+echo "   - P1 -> http://127.0.0.1:8081"
+echo "   - P2 -> http://127.0.0.1:8082"
+echo ""
+echo "=============================================================="
+echo "AGORA ABRA 3 TERMINAIS (Cloud Shell: 'Open in new tab') E RODE:"
+echo "=============================================================="
+echo ""
+echo "Terminal 1 (logs P0):"
+echo "kubectl logs -f ${POD_PREFIX}-0"
+echo ""
+echo "Terminal 2 (logs P1):"
+echo "kubectl logs -f ${POD_PREFIX}-1"
+echo ""
+echo "Terminal 3 (logs P2):"
+echo "kubectl logs -f ${POD_PREFIX}-2"
+echo ""
+echo "=============================================================="
+echo "No terminal principal, rode os testes:"
+echo "cd testes"
+echo "./teste_q1_normal.sh"
+echo "./teste_q1_lento.sh"
+echo "./teste_q2.sh"
+echo "./teste_q3.sh"
+echo "=============================================================="
+echo ""

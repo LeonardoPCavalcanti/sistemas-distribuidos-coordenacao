@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: algoritmos-coordenacao
+spec:
+  serviceName: algoritmos-coordenacao-service
+  replicas: 3
+  selector:
+    matchLabels:
+      app: algoritmos-coordenacao
+  template:
+    metadata:
+      labels:
+        app: algoritmos-coordenacao
+    spec:
+      containers:
+        - name: algoritmos-coordenacao-container
+          image: algoritmos-distribuidos:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              name: http
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "128Mi"
+            limits:
+              cpu: "300m"
+              memory: "128Mi"
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: TOTAL_PROCESSES
+              value: "3"
+            - name: STATEFULSET_NAME
+              value: "algoritmos-coordenacao"
+            - name: SERVICE_NAME
+              value: "algoritmos-coordenacao-service"
